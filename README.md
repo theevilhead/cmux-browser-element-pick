@@ -5,6 +5,8 @@ Click an element in the **cmux** in-app browser and send its **DOM + computed CS
 etc.). It's the "annotate the UI, feed it to the agent" loop, built entirely on
 cmux's existing CLI primitives — no Chrome extension, no MCP server, no daemon.
 
+![cmux-browser-element-pick highlighting an element in the cmux in-app browser](docs/screenshot.png)
+
 ## Why
 
 A coding agent in a terminal can't see what you're looking at in the browser.
