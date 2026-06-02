@@ -1,0 +1,49 @@
+{
+  "name": "cmux-browser-element-pick",
+  "version": "0.1.0",
+  "description": "Option+Click an element in the cmux in-app browser and send its DOM + computed CSS + design tokens to your coding agent's pane.",
+  "type": "module",
+  "bin": {
+    "cmux-browser-element-pick": "bin/cmux-browser-element-pick.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node bin/cmux-browser-element-pick.mjs"
+  },
+  "keywords": [
+    "cmux",
+    "browser",
+    "element-picker",
+    "coding-agent",
+    "claude-code",
+    "codex",
+    "devtools",
+    "dom",
+    "css",
+    "design-tokens"
+  ],
+  "author": "Girish Patil",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-handle/cmux-browser-element-pick.git"
+  },
+  "homepage": "https://github.com/your-handle/cmux-browser-element-pick#readme",
+  "bugs": {
+    "url": "https://github.com/your-handle/cmux-browser-element-pick/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "darwin"
+  ]
+}

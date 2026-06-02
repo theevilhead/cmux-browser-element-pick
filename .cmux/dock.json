@@ -1,0 +1,11 @@
+{
+  "controls": [
+    {
+      "id": "cmux-browser-element-pick",
+      "title": "Pick element → agent",
+      "command": "cmux-browser-element-pick",
+      "cwd": ".",
+      "height": 200
+    }
+  ]
+}
