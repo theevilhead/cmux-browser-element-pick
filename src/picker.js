@@ -7,11 +7,13 @@
 (() => {
   if (window.__cmuxPickerInstalled) return "already-installed";
   window.__cmuxPickerInstalled = true;
+  window.__cmuxPickerDisabled = false;
   window.__cmuxPicks = window.__cmuxPicks || [];
 
   const OVERLAY_ID = "__cmux_pick_overlay__";
   const LABEL_ID = "__cmux_pick_label__";
   const TOAST_ID = "__cmux_pick_toast__";
+  const COMMENT_ID = "__cmux_pick_comment__";
 
   // Computed-CSS allowlist, grouped for UI-dev relevance.
   const CSS_PROPS = [
@@ -54,7 +56,11 @@
     "font:11px/1.4 ui-monospace,Menlo,monospace;padding:2px 6px;border-radius:4px;display:none;white-space:nowrap;");
 
   function isOurs(el) {
-    return el && el.id && (el.id === OVERLAY_ID || el.id === LABEL_ID || el.id === TOAST_ID);
+    if (!el || el.nodeType !== 1) return false;
+    if (el.id === OVERLAY_ID || el.id === LABEL_ID || el.id === TOAST_ID || el.id === COMMENT_ID) return true;
+    // The comment box has children (label, input); treat its whole subtree as ours.
+    const box = document.getElementById(COMMENT_ID);
+    return !!(box && box.contains(el));
   }
 
   function selectorPath(el) {
@@ -100,7 +106,7 @@
     return out;
   }
 
-  // Find the custom properties this element actually references via var() — in
+  // Find the custom properties this element actually references via var() - in
   // its inline style and in the CSS rules whose selector matches it. Then
   // resolve each to its effective value. This keeps tokens element-relevant
   // instead of dumping the whole :root palette. Cross-origin sheets are skipped.
@@ -149,22 +155,41 @@
     return html;
   }
 
+  // Ancestors immediate-parent-first up to and including body, capped at 6.
+  function parentHierarchy(el) {
+    const out = [];
+    let node = el.parentElement;
+    while (node && node.nodeType === 1 && out.length < 6) {
+      out.push({
+        tag: node.tagName.toLowerCase(),
+        id: node.id || null,
+        classes: (node.getAttribute("class") || "").trim() || null,
+        selector: selectorPath(node),
+      });
+      if (node.tagName === "BODY") break;
+      node = node.parentElement;
+    }
+    return out;
+  }
+
   function capture(el) {
     const r = el.getBoundingClientRect();
     return {
-      url: location.href,
+      pageUrl: location.href,
       ts: Date.now(),
       tagName: el.tagName.toLowerCase(),
       id: el.id || null,
       classes: (el.getAttribute("class") || "").trim() || null,
       role: el.getAttribute("role") || null,
-      text: (el.innerText || "").replace(/\s+/g, " ").trim().slice(0, 200) || null,
+      visibleText: (el.innerText || "").replace(/\s+/g, " ").trim().slice(0, 200) || null,
       selector: selectorPath(el),
       xpath: xpath(el),
-      box: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
-      css: computedCss(el),
+      boundingBox: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+      computedStyles: computedCss(el),
       tokens: designTokens(el),
-      html: trimHtml(el),
+      selectedElementHtml: trimHtml(el),
+      parentHierarchy: parentHierarchy(el),
+      userComment: null,
     };
   }
 
@@ -181,10 +206,79 @@
   }
 
   let current = null;
+  // The pick captured at click time, awaiting an optional comment. While set,
+  // the comment box is open and Esc cancels the box instead of tearing down.
+  let pendingPick = null;
 
   function hideOverlay() {
     overlay.style.display = "none";
     label.style.display = "none";
+  }
+
+  function closeCommentBox() {
+    pendingPick = null;
+    const box = document.getElementById(COMMENT_ID);
+    if (box) box.remove();
+  }
+
+  // Build the comment box fresh each time so its input starts empty/focused.
+  function openCommentBox(pick) {
+    closeCommentBox();
+    pendingPick = pick;
+    const box = document.createElement("div");
+    box.id = COMMENT_ID;
+    box.style.cssText =
+      "position:fixed;z-index:2147483647;left:50%;bottom:72px;transform:translateX(-50%);" +
+      "background:#0f172a;color:#e5e7eb;font:13px/1.4 ui-sans-serif,system-ui;padding:12px 14px;" +
+      "border:1px solid #4f8cff;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.45);" +
+      "display:flex;flex-direction:column;gap:8px;min-width:320px;max-width:480px;";
+
+    const lbl = document.createElement("div");
+    lbl.textContent = "Add a note (optional) - Enter to send, Esc to cancel";
+    lbl.style.cssText = "font-size:12px;color:#9ca3af;";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = "e.g. this button should be larger";
+    input.style.cssText =
+      "background:#1e293b;color:#fff;border:1px solid #334155;border-radius:6px;" +
+      "padding:7px 9px;font:13px/1.4 ui-sans-serif,system-ui;outline:none;width:100%;box-sizing:border-box;";
+
+    // Stop the picker's capture-phase listeners from swallowing input keys/clicks.
+    const stop = (ev) => { ev.stopPropagation(); };
+    input.addEventListener("keydown", (ev) => {
+      ev.stopPropagation();
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        submitComment(input.value);
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
+        closeCommentBox();
+        toast("Pick cancelled");
+      }
+    }, true);
+    input.addEventListener("keyup", stop, true);
+    box.addEventListener("click", stop, true);
+    box.addEventListener("mousedown", stop, true);
+    box.addEventListener("pointerdown", stop, true);
+
+    box.appendChild(lbl);
+    box.appendChild(input);
+    document.documentElement.appendChild(box);
+    input.focus();
+  }
+
+  function submitComment(value) {
+    if (!pendingPick) return;
+    const pick = pendingPick;
+    pick.userComment = (value || "").trim() || null;
+    try {
+      window.__cmuxPicks.push(pick);
+      toast("✓ Picked " + pick.tagName + " → agent");
+    } catch (err) {
+      toast("Pick failed: " + (err && err.message));
+    }
+    closeCommentBox();
   }
 
   // Armed only while Option/Alt is held, so normal browsing (clicks, links,
@@ -226,15 +320,19 @@
     e.stopImmediatePropagation();
     const el = current || e.target;
     try {
-      window.__cmuxPicks.push(capture(el));
-      toast("✓ picked " + el.tagName.toLowerCase() + " → agent");
+      // Capture now so later DOM changes do not affect the pick; collect the
+      // comment interactively, then push the assembled object on submit.
+      openCommentBox(capture(el));
     } catch (err) {
-      toast("pick failed: " + (err && err.message));
+      toast("Pick failed: " + (err && err.message));
     }
   }
 
   function teardown() {
     window.__cmuxPickerInstalled = false;
+    // Mark an explicit user stop so the driver does NOT re-inject. Cleared
+    // automatically on navigation (fresh window), which re-arms the picker.
+    window.__cmuxPickerDisabled = true;
     document.removeEventListener("mousemove", onMove, true);
     document.removeEventListener("pointerdown", swallow, true);
     document.removeEventListener("mousedown", swallow, true);
@@ -242,12 +340,17 @@
     document.removeEventListener("auxclick", swallow, true);
     document.removeEventListener("click", onClick, true);
     document.removeEventListener("keydown", onKey, true);
+    closeCommentBox();
     overlay.remove(); label.remove();
-    toast("picker off");
+    toast("Picker off");
   }
 
   function onKey(e) {
-    if (e.key === "Escape") { e.preventDefault(); teardown(); }
+    if (e.key !== "Escape") return;
+    // When the comment box is open its own handler cancels it; do not tear down.
+    if (pendingPick) return;
+    e.preventDefault();
+    teardown();
   }
 
   document.addEventListener("mousemove", onMove, true);
@@ -257,6 +360,6 @@
   document.addEventListener("auxclick", swallow, true);
   document.addEventListener("click", onClick, true);
   document.addEventListener("keydown", onKey, true);
-  toast("cmux-browser-element-pick on — Option+Click an element to send it (Esc to stop)");
+  toast("Picker on - Option+Click an element to send it (Esc to stop)");
   return "installed";
 })();

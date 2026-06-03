@@ -5,7 +5,15 @@
       "title": "Pick element → agent",
       "command": "cmux-browser-element-pick",
       "cwd": ".",
-      "height": 200
+      "height": 1
+    },
+    {
+      "id": "test-control",
+      "title": "Test control",
+      "command": "echo 'Test control'",
+      "cwd": ".",
+      "height": 200,
+      "width": 200
     }
   ]
 }

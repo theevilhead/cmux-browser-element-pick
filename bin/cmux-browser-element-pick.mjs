@@ -1,39 +1,42 @@
 #!/usr/bin/env node
-// cmux-browser-element-pick — click an element in the cmux in-app browser, send it to the
+// cmux-browser-element-pick - click an element in the cmux in-app browser, send it to the
 // coding-agent pane. Built entirely on cmux CLI primitives.
 //
 // Usage:
-//   cmux-browser-element-pick [--browser surface:N] [--agent surface:M] [--enter] [--once] [--poll 250]
+//   cmux-browser-element-pick [--browser surface:N] [--agent surface:M] [--enter] [--once] [--poll 400]
 //
 //   --browser  Browser surface to pick from. Default: active/first browser surface.
 //   --agent    Terminal surface to paste into. Default: caller terminal, else
 //              another terminal in the browser's workspace.
 //   --enter    Press Enter after pasting (auto-submit to the agent).
 //   --once     Capture a single element, then exit.
-//   --poll     Poll interval in ms (default 250).
+//   --poll     Poll interval in ms between non-blocking checks (default 400).
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from "node:fs";
+import {
+  readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync,
+  readdirSync, statSync, unlinkSync,
+} from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import {
-  tree, surfaces, browserEval,
-  pasteToSurface, sendText, sendKey, notify,
+  tree, surfaces, browserEval, selfRef, backendName,
+  pasteToSurface, sendText, sendKey, notify, closeSocket,
 } from "../src/cmux.mjs";
-import { formatPick, summaryLine } from "../src/format.mjs";
+import { formatHtml, formatText, summaryLine } from "../src/format.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PICKER_SRC = readFileSync(join(__dirname, "..", "src", "picker.js"), "utf8");
 const OUT_DIR = join(tmpdir(), "cmux-browser-element-pick");
 
 function parseArgs(argv) {
-  const a = { enter: false, once: false, inline: false, poll: 250, browser: null, agent: null };
+  const a = { enter: false, once: false, inline: false, poll: 400, browser: null, agent: null };
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
     if (t === "--enter") a.enter = true;
     else if (t === "--once") a.once = true;
     else if (t === "--inline") a.inline = true;
-    else if (t === "--poll") a.poll = parseInt(argv[++i], 10) || 250;
+    else if (t === "--poll") a.poll = parseInt(argv[++i], 10) || 400;
     else if (t === "--browser") a.browser = argv[++i];
     else if (t === "--agent") a.agent = argv[++i];
     else if (t === "-h" || t === "--help") { a.help = true; }
@@ -41,7 +44,7 @@ function parseArgs(argv) {
   return a;
 }
 
-const HELP = `cmux-browser-element-pick — Option+Click a browser element, send it to your coding agent.
+const HELP = `cmux-browser-element-pick - Option+Click a browser element, send it to your coding agent.
 
   cmux-browser-element-pick init        add a Dock control to ~/.config/cmux/dock.json
   cmux-browser-element-pick [--browser surface:N] [--agent surface:M] [--enter] [--once] [--inline] [--poll 250]
@@ -52,7 +55,7 @@ const HELP = `cmux-browser-element-pick — Option+Click a browser element, send
   --once     capture one element then exit
   --inline   paste the full block into the prompt instead of a file reference
              (may execute line-by-line in a raw shell; safe in agent TUIs)
-  --poll     poll interval ms (default 250)
+  --poll     poll interval ms between non-blocking checks (default 400)
 
 By default the full DOM/CSS/tokens are written to a file under
 ${OUT_DIR} and a one-line reference is sent to the agent.
@@ -74,11 +77,11 @@ async function resolveTargets(args) {
 
   const browserWs = (all.find((s) => s.ref === browser) || {}).workspace_ref;
 
-  // The surface running THIS driver (Dock section or the launching terminal).
-  // caller.surface_ref is the ref form ("surface:N") matching the flattened
-  // tree; CMUX_SURFACE_ID is a UUID and would not match. Exclude it so picks
-  // never get pasted back into our own CLI.
-  const self = caller.surface_ref;
+  // The surface running THIS driver (Dock section or the launching terminal),
+  // in the same id space as the surface refs (socket=UUID via CMUX_SURFACE_ID,
+  // CLI=ref via identify.caller). Exclude it so picks never get pasted back
+  // into our own pane.
+  const self = selfRef(t);
   const AGENT_RE = /claude|codex|opencode|aider|gemini|goose|amp|cline|cursor/i;
 
   // Agent terminal surface: a terminal that is NOT us, preferring one whose
@@ -100,11 +103,36 @@ async function resolveTargets(args) {
   return { browser, agent };
 }
 
-const DRAIN = `(() => { const q = window.__cmuxPicks || []; window.__cmuxPicks = []; return q; })()`;
-
+// One cheap eval per poll cycle: drain queued picks AND report whether the
+// picker is still installed (a navigation wipes it). Each eval is ~30ms and
+// non-blocking; we sleep between cycles so the page main thread stays free.
+// (cmux's browser.wait long-poll holds the WKWebView JS thread for the whole
+// timeout, which freezes the page - so we poll instead of blocking.)
+const DRAIN = `(() => { const i = window.__cmuxPickerInstalled === true; const d = window.__cmuxPickerDisabled === true; const q = window.__cmuxPicks || []; window.__cmuxPicks = []; return { installed: i, disabled: d, picks: q }; })()`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// `cmux-browser-element-pick init` — add a Dock control to ~/.config/cmux/dock.json so the
+// Keep the pick-file directory bounded: drop files older than maxAgeMs, then cap
+// to the newest maxFiles. Covers every "pick-*" file (the .html bundles).
+// Each pick writes two files, so the cap is doubled to keep ~200 picks.
+function pruneOutDir({ maxAgeMs = 24 * 60 * 60 * 1000, maxFiles = 200 } = {}) {
+  try {
+    if (!existsSync(OUT_DIR)) return;
+    const now = Date.now();
+    let kept = [];
+    for (const name of readdirSync(OUT_DIR)) {
+      if (!name.startsWith("pick-")) continue;
+      const p = join(OUT_DIR, name);
+      let m;
+      try { m = statSync(p).mtimeMs; } catch (_) { continue; }
+      if (now - m > maxAgeMs) { try { unlinkSync(p); } catch (_) {} }
+      else kept.push({ p, m });
+    }
+    kept.sort((a, b) => b.m - a.m);
+    for (const f of kept.slice(maxFiles)) { try { unlinkSync(f.p); } catch (_) {} }
+  } catch (_) { /* best effort */ }
+}
+
+// `cmux-browser-element-pick init` - add a Dock control to ~/.config/cmux/dock.json so the
 // picker launches from the cmux sidebar. Backs up any existing config first.
 function initDock() {
   const dir = join(homedir(), ".config", "cmux");
@@ -150,7 +178,7 @@ async function main() {
   if (args.help) { process.stdout.write(HELP); return; }
 
   const { browser, agent } = await resolveTargets(args);
-  process.stderr.write(`cmux-browser-element-pick: browser=${browser} agent=${agent}\n`);
+  process.stderr.write(`cmux-browser-element-pick: backend=${await backendName()} browser=${browser} agent=${agent}\n`);
 
   // Install the picker now. The poll loop re-injects it after navigations
   // (avoids addinitscript, which pins a stale snapshot of the script).
@@ -163,30 +191,51 @@ async function main() {
     if (stopping) return;
     stopping = true;
     try { await browserEval(browser, "window.__cmuxPickerInstalled && (window.__cmuxPickerInstalled=false)"); } catch (_) {}
+    closeSocket();
     process.exit(0);
   };
   process.on("SIGINT", onExit);
   process.on("SIGTERM", onExit);
 
+  mkdirSync(OUT_DIR, { recursive: true });
+  pruneOutDir();
+
   let count = 0;
+  let misses = 0;
   while (!stopping) {
-    let picks = [];
+    // One cheap, non-blocking eval: drain picks + check the picker is alive.
+    let res;
     try {
-      // Re-inject after a navigation cleared the picker (sticky armed state
-      // survives via sessionStorage).
-      const present = await browserEval(browser, "window.__cmuxPickerInstalled===true");
-      if (!present) await browserEval(browser, PICKER_SRC);
-      picks = (await browserEval(browser, DRAIN)) || [];
-    } catch (e) { process.stderr.write(`cmux-browser-element-pick: drain error: ${e.message}\n`); }
+      res = await browserEval(browser, DRAIN);
+      misses = 0;
+    } catch (e) {
+      // Browser surface unavailable (closed / navigated away / not a browser).
+      if (++misses >= 3) {
+        process.stderr.write(`cmux-browser-element-pick: browser gone (${e.message}); exiting.\n`);
+        await onExit();
+        return;
+      }
+      await sleep(1000);
+      continue;
+    }
+
+    const picks = (res && res.picks) || [];
+    // Re-arm if a navigation wiped the picker, but NOT if the user pressed Esc
+    // to stop it (that sentinel is cleared on navigation, so a new page re-arms).
+    if (!(res && res.installed) && !(res && res.disabled)) {
+      try { await browserEval(browser, PICKER_SRC); } catch (_) {}
+    }
+    if (!picks.length) { await sleep(args.poll); continue; }
 
     for (const p of picks) {
-      const block = formatPick(p);
+      mkdirSync(OUT_DIR, { recursive: true });
+      const ts = Date.now();
+
       if (args.inline) {
-        await pasteToSurface(agent, block + "\n");
+        await pasteToSurface(agent, formatText(p) + "\n");
       } else {
-        mkdirSync(OUT_DIR, { recursive: true });
-        const file = join(OUT_DIR, `pick-${Date.now()}-${count}.md`);
-        writeFileSync(file, block + "\n");
+        const file = join(OUT_DIR, `pick-${ts}-${count}.html`);
+        writeFileSync(file, formatHtml(p));
         await sendText(agent, summaryLine(p, file));
       }
       if (args.enter) await sendKey(agent, "enter");
@@ -194,7 +243,6 @@ async function main() {
       process.stderr.write(`cmux-browser-element-pick: sent ${p.tagName} (${p.selector}) -> ${agent}\n`);
       if (args.once) { await onExit(); return; }
     }
-    await sleep(args.poll);
   }
 }
 

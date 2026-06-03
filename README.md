@@ -3,15 +3,15 @@
 Click an element in the **cmux** in-app browser and send its **DOM + computed CSS
 + design tokens** straight into your coding agent's pane (Claude Code, Codex,
 etc.). It's the "annotate the UI, feed it to the agent" loop, built entirely on
-cmux's existing CLI primitives — no Chrome extension, no MCP server, no daemon.
+cmux's existing CLI primitives - no Chrome extension, no MCP server, no daemon.
 
 ![cmux-browser-element-pick highlighting an element in the cmux in-app browser](docs/screenshot.png)
 
 ## Why
 
 A coding agent in a terminal can't see what you're looking at in the browser.
-cmux-browser-element-pick closes that gap: hover an element, click it, and a clean markdown
-context bundle lands where your agent can read it.
+cmux-browser-element-pick closes that gap: hover an element, click it, and a clean HTML
+context file lands where your agent can read it.
 
 ## Requirements
 
@@ -30,7 +30,7 @@ cmux reload-config                   # pick it up without restarting cmux
 
 `cmux-browser-element-pick init` writes (and backs up) `~/.config/cmux/dock.json` so a
 **Pick element → agent** control appears in the cmux Dock. Open that control,
-open the in-app browser, and Option+Click elements — they land in your agent
+open the in-app browser, and Option+Click elements - they land in your agent
 pane. Prefer manual setup? See [Launch from the cmux Dock](#launch-from-the-cmux-dock-stays-running).
 
 ### From source
@@ -48,18 +48,40 @@ cmux-browser-element-pick init
 cmux-browser-element-pick (driver)
   1. cmux identify / tree   -> find the browser surface + the agent terminal
   2. cmux browser <b> eval  -> inject a hover/click picker into the WKWebView
-  3. poll the browser       -> drain clicked elements (window.__cmuxPicks)
-  4. write context to a file -> /tmp/cmux-browser-element-pick/pick-*.md (DOM + CSS + tokens)
+  3. browser eval (poll ~400ms) -> drain window.__cmuxPicks, re-arm if navigated
+  4. write context to a file -> /tmp/cmux-browser-element-pick/pick-*.html (DOM + CSS + tokens)
   5. cmux send <agent>      -> paste a one-line reference into the agent prompt
 ```
+
+**Transport:** it talks to cmux over the **Unix socket** (`$CMUX_SOCKET_PATH`,
+newline-delimited JSON - `system.tree`, `browser.eval`,
+`surface.send_text`, `surface.send_key`) using one persistent connection. If the
+socket is unavailable it transparently falls back to the `cmux` CLI. Surface
+targeting differs per backend (socket = UUID, CLI = `surface:N` ref); that's
+normalized internally so the picker is identical.
+
+**Polling, not long-poll:** there's no push channel from the page to the driver.
+cmux does have a `browser.wait` long-poll, but it holds the WKWebView's JS main
+thread for the whole timeout - which **freezes the page** (macOS beachball, dead
+clicks). So the driver instead runs a short, non-blocking `browser.eval` every
+`--poll` ms (default 400) that drains queued picks and re-arms the picker if a
+navigation cleared it. Each eval is ~30ms and yields the page thread between
+checks, so browsing stays smooth. The driver exits on its own if the browser
+surface goes away.
 
 The picker (`src/picker.js`) runs in the page and is **armed by the Option/Alt
 modifier**: hold Option to highlight elements, then **Option+Click** to capture.
 Plain clicks pass straight through, so normal browsing keeps working while the
-picker stays running. A capture grabs `outerHTML` (trimmed), a UI-dev allowlist
-of computed CSS, the CSS custom properties (`--*`) the element actually
-references, plus selector, xpath and bounding box. `Esc` turns the picker off.
-The driver re-injects the picker automatically after you navigate.
+picker stays running. On Option+Click a small **comment box** opens so you can
+attach a note (Enter to send, Esc to cancel that pick).
+
+Each capture collects: `pageUrl`, `selector`, `selectedElementHtml` (trimmed
+outerHTML), `computedStyles` (a UI-dev allowlist), the CSS custom properties
+(`--*`) the element actually references, `boundingBox`, `visibleText`, `xpath`,
+`parentHierarchy` (ancestors up to body), and your `userComment`. The full bundle
+is written as a standalone `.html` file the agent can open. `Esc` with no comment
+box open turns the picker off. The driver re-injects the picker automatically
+after you navigate.
 
 By default the full bundle is written to a file and only a **single line**
 (prompt-safe, won't auto-submit) is sent to the agent. This is deliberate: cmux
@@ -85,7 +107,7 @@ Flags:
 | `--enter`             | press Enter after sending (auto-submit to the agent) |
 | `--once`              | capture a single element then exit |
 | `--inline`            | paste the full block instead of a file reference (agent TUIs only) |
-| `--poll <ms>`         | poll interval (default 250) |
+| `--poll <ms>`         | poll interval between non-blocking checks (default 400) |
 
 Run it, then **Option+Click** elements in the cmux browser. Each pick drops a
 context file and a reference into your agent's prompt. `Ctrl+C` in the terminal
@@ -95,7 +117,7 @@ stops the driver; `Esc` in the browser stops the picker overlay.
 
 `.cmux/dock.json` adds a sidebar control that runs the picker in its own section.
 A Dock control runs its command when the section opens and the driver loops, so
-cmux-browser-element-pick stays **armed continuously** — and because capture is gated on
+cmux-browser-element-pick stays **armed continuously** - and because capture is gated on
 Option+Click, normal browsing is unaffected while it runs.
 
 ```json
@@ -112,7 +134,7 @@ cmux shows a trust gate the first time it sees a project Dock config. See
 
 When launched from the Dock, cmux-browser-element-pick runs in its own terminal section. It
 **excludes that section** when choosing where to send picks, and targets another
-terminal — preferring one whose title looks like a coding agent (claude, codex,
+terminal - preferring one whose title looks like a coding agent (claude, codex,
 opencode, aider, gemini, …). If it guesses wrong, pin the target explicitly:
 
 ```json
@@ -131,7 +153,7 @@ Then point a Dock control or global `~/.config/cmux/dock.json` at `cmux-browser-
 
 ## Limitations / roadmap
 
-- macOS + cmux only (by design — uses the cmux browser + socket).
+- macOS + cmux only (by design - uses the cmux browser + socket).
 - No source `file:line` mapping yet (Phase 2: React DevTools hook in dev builds).
 - Design tokens are resolved from same-origin stylesheets; cross-origin sheets
   are skipped.
