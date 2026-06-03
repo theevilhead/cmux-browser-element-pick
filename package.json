@@ -30,7 +30,7 @@
     "css",
     "design-tokens"
   ],
-  "author": "Girish Patil",
+  "author": "Girish Patil <girish@evilhead.me>",
   "license": "MIT",
   "repository": {
     "type": "git",
