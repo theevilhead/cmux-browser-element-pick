@@ -50,7 +50,8 @@ cmux-browser-element-pick (driver)
   2. cmux browser <b> eval  -> inject a hover/click picker into the WKWebView
   3. browser eval (poll ~400ms) -> drain window.__cmuxPicks, re-arm if navigated
   4. write context to a file -> /tmp/cmux-browser-element-pick/pick-*.html (DOM + CSS + tokens)
-  5. cmux send <agent>      -> paste a one-line reference into the agent prompt
+  5. send <agent>          -> send a single reference line pointing at the HTML
+                              file, then one Enter to submit it
 ```
 
 **Transport:** it talks to cmux over the **Unix socket** (`$CMUX_SOCKET_PATH`,
@@ -83,17 +84,20 @@ is written as a standalone `.html` file the agent can open. `Esc` with no commen
 box open turns the picker off. The driver re-injects the picker automatically
 after you navigate.
 
-By default the full bundle is written to a file and only a **single line**
-(prompt-safe, won't auto-submit) is sent to the agent. This is deliberate: cmux
-forwards raw newlines as Enter, so dumping a multi-line block inline would
-execute line-by-line in a shell. Use `--inline` only with agent TUIs that handle
-bracketed paste.
+Each pick writes the full element context - identity (tag, text, note), location
+(page, selector, xpath, box), `class`/`role`, the ancestor chain, computed
+styles, design tokens, and the element's DOM - to a standalone `.html` file under
+the temp dir, then sends the agent a single reference line pointing at that file
+and submits it. Nothing else is typed into the prompt, so there's no multi-line
+paste, no "pasted text" chip, and no line-by-line submission.
+
+Use `--no-enter` to leave the reference line in the prompt without submitting.
 
 ## Usage
 
 ```sh
 node bin/cmux-browser-element-pick.mjs            # auto-detect browser + agent surfaces
-node bin/cmux-browser-element-pick.mjs --enter    # auto-submit each pick to the agent
+node bin/cmux-browser-element-pick.mjs --no-enter  # leave the reference line unsubmitted
 node bin/cmux-browser-element-pick.mjs --once     # capture one element then exit
 node bin/cmux-browser-element-pick.mjs --browser surface:12 --agent surface:11
 ```
@@ -104,9 +108,8 @@ Flags:
 |------|---------|
 | `--browser surface:N` | browser surface to pick from (default: active/first browser) |
 | `--agent surface:M`   | terminal surface to send to (default: caller / sibling terminal) |
-| `--enter`             | press Enter after sending (auto-submit to the agent) |
+| `--no-enter`          | do not auto-submit; leave the reference line in the prompt |
 | `--once`              | capture a single element then exit |
-| `--inline`            | paste the full block instead of a file reference (agent TUIs only) |
 | `--poll <ms>`         | poll interval between non-blocking checks (default 400) |
 
 Run it, then **Option+Click** elements in the cmux browser. Each pick drops a

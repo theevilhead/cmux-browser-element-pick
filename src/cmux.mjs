@@ -135,13 +135,6 @@ export async function sendKey(surface, key) {
   await cli(["send-key", "--surface", surface, key]);
 }
 
-// Paste a multi-line block via bracketed paste (--inline path). CLI-only; the
-// socket has no buffer/paste method. The CLI accepts UUIDs as well as refs.
-export async function pasteToSurface(surface, text) {
-  await cli(["set-buffer", "--", text]);
-  await cli(["paste-buffer", "--surface", surface]);
-}
-
 export async function notify(title, body) {
   try { await cli(["notify", "--title", title, "--body", body || ""]); }
   catch (_) { /* non-fatal */ }

@@ -1,6 +1,6 @@
-// Render a captured pick (from picker.js) into either a standalone HTML file
-// (default, written to disk and referenced in the agent prompt) or a compact
-// plain-text block (the --inline path). One-line summary is the prompt pointer.
+// Render a captured pick (from picker.js): formatHtml builds a standalone HTML
+// file written to disk; summaryLine is the one-line reference sent to the agent
+// pointing at that file.
 
 // Strip control chars / ANSI escapes that could corrupt the terminal or file.
 export function sanitize(s) {
@@ -100,34 +100,6 @@ ${p.userComment ? `<h2>User note</h2>\n<div class="comment">${esc(p.userComment)
 </body>
 </html>
 `;
-}
-
-// Compact plain-text block for the --inline path (pasted into the prompt).
-export function formatText(p) {
-  const box = p.boundingBox || {};
-  const lines = [];
-  lines.push(`[picked ${p.tagName || ""}${p.id ? "#" + p.id : ""}] ${sanitize(p.selector)}`);
-  lines.push("");
-  lines.push(`- url: ${sanitize(p.pageUrl)}`);
-  lines.push(`- selector: ${sanitize(p.selector)}`);
-  lines.push(`- box: ${box.w}x${box.h} @ (${box.x}, ${box.y})`);
-  if (p.classes) lines.push(`- class: ${sanitize(p.classes)}`);
-  if (p.role) lines.push(`- role: ${sanitize(p.role)}`);
-  if (p.visibleText) lines.push(`- text: ${sanitize(p.visibleText)}`);
-  lines.push(`- xpath: ${sanitize(p.xpath)}`);
-  lines.push(`- comment: ${p.userComment ? sanitize(p.userComment) : "(none)"}`);
-  lines.push("");
-  lines.push("Ancestors (parent-first):");
-  for (const a of p.parentHierarchy || []) {
-    lines.push(`- <${sanitize(a.tag)}>${a.id ? "#" + sanitize(a.id) : ""}  (${sanitize(a.selector)})`);
-  }
-  lines.push("");
-  lines.push("Computed styles:");
-  for (const [k, v] of Object.entries(p.computedStyles || {})) lines.push(`- ${k}: ${sanitize(v)}`);
-  lines.push("");
-  lines.push("DOM:");
-  lines.push(sanitize(p.selectedElementHtml));
-  return lines.join("\n");
 }
 
 // One-line, prompt-safe instruction pasted into the agent. Points at the HTML

@@ -21,21 +21,22 @@ import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import {
   tree, surfaces, browserEval, selfRef, backendName,
-  pasteToSurface, sendText, sendKey, notify, closeSocket,
+  sendText, sendKey, notify, closeSocket,
 } from "../src/cmux.mjs";
-import { formatHtml, formatText, summaryLine } from "../src/format.mjs";
+import { formatHtml, summaryLine } from "../src/format.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PICKER_SRC = readFileSync(join(__dirname, "..", "src", "picker.js"), "utf8");
 const OUT_DIR = join(tmpdir(), "cmux-browser-element-pick");
 
 function parseArgs(argv) {
-  const a = { enter: false, once: false, inline: false, poll: 400, browser: null, agent: null };
+  const a = { submit: true, once: false, poll: 400, browser: null, agent: null };
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
-    if (t === "--enter") a.enter = true;
+    if (t === "--no-enter" || t === "--no-submit") a.submit = false;
+    else if (t === "--enter") a.submit = true;
     else if (t === "--once") a.once = true;
-    else if (t === "--inline") a.inline = true;
+    else if (t === "--ref" || t === "--inline") { /* removed; no-op for back-compat */ }
     else if (t === "--poll") a.poll = parseInt(argv[++i], 10) || 400;
     else if (t === "--browser") a.browser = argv[++i];
     else if (t === "--agent") a.agent = argv[++i];
@@ -47,18 +48,17 @@ function parseArgs(argv) {
 const HELP = `cmux-browser-element-pick - Option+Click a browser element, send it to your coding agent.
 
   cmux-browser-element-pick init        add a Dock control to ~/.config/cmux/dock.json
-  cmux-browser-element-pick [--browser surface:N] [--agent surface:M] [--enter] [--once] [--inline] [--poll 250]
+  cmux-browser-element-pick [--browser surface:N] [--agent surface:M] [--no-enter] [--once] [--poll 400]
 
-  --browser  browser surface to pick from (default: active/first browser)
-  --agent    terminal surface to send to (default: caller / sibling terminal)
-  --enter    auto-submit to the agent after sending
-  --once     capture one element then exit
-  --inline   paste the full block into the prompt instead of a file reference
-             (may execute line-by-line in a raw shell; safe in agent TUIs)
-  --poll     poll interval ms between non-blocking checks (default 400)
+  --browser   browser surface to pick from (default: active/first browser)
+  --agent     terminal surface to send to (default: caller / sibling terminal)
+  --no-enter  do NOT auto-submit; leave the reference line in the prompt
+  --once      capture one element then exit
+  --poll      poll interval ms between non-blocking checks (default 400)
 
-By default the full DOM/CSS/tokens are written to a file under
-${OUT_DIR} and a one-line reference is sent to the agent.
+Each pick writes the full element context (DOM, computed CSS, design tokens) to
+an HTML file under ${OUT_DIR}
+and sends the agent a single reference line pointing at it, then submits.
 `;
 
 async function resolveTargets(args) {
@@ -230,15 +230,14 @@ async function main() {
     for (const p of picks) {
       mkdirSync(OUT_DIR, { recursive: true });
       const ts = Date.now();
+      const file = join(OUT_DIR, `pick-${ts}-${count}.html`);
+      writeFileSync(file, formatHtml(p));
 
-      if (args.inline) {
-        await pasteToSurface(agent, formatText(p) + "\n");
-      } else {
-        const file = join(OUT_DIR, `pick-${ts}-${count}.html`);
-        writeFileSync(file, formatHtml(p));
-        await sendText(agent, summaryLine(p, file));
-      }
-      if (args.enter) await sendKey(agent, "enter");
+      // Write the full element context to an HTML file and send the agent a
+      // single reference line pointing at it - nothing else.
+      await sendText(agent, summaryLine(p, file));
+      // Auto-submit it as one message (disable with --no-enter).
+      if (args.submit) await sendKey(agent, "enter");
       count++;
       process.stderr.write(`cmux-browser-element-pick: sent ${p.tagName} (${p.selector}) -> ${agent}\n`);
       if (args.once) { await onExit(); return; }
