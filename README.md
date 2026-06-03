@@ -5,7 +5,7 @@ Click an element in the **cmux** in-app browser and send its **DOM + computed CS
 etc.). It's the "annotate the UI, feed it to the agent" loop, built entirely on
 cmux's existing CLI primitives - no Chrome extension, no MCP server, no daemon.
 
-![cmux-browser-element-pick highlighting an element in the cmux in-app browser](docs/screenshot.png)
+![cmux-browser-element-pick highlighting an element in the cmux in-app browser](https://raw.githubusercontent.com/theevilhead/cmux-browser-element-pick/main/docs/screenshot.png)
 
 ## Why
 
@@ -36,7 +36,7 @@ pane. Prefer manual setup? See [Launch from the cmux Dock](#launch-from-the-cmux
 ### From source
 
 ```sh
-git clone https://github.com/your-handle/cmux-browser-element-pick
+git clone https://github.com/theevilhead/cmux-browser-element-pick
 cd cmux-browser-element-pick
 npm link            # exposes `cmux-browser-element-pick` globally
 cmux-browser-element-pick init

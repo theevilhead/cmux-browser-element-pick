@@ -34,11 +34,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/your-handle/cmux-browser-element-pick.git"
+    "url": "git+https://github.com/theevilhead/cmux-browser-element-pick.git"
   },
-  "homepage": "https://github.com/your-handle/cmux-browser-element-pick#readme",
+  "homepage": "https://github.com/theevilhead/cmux-browser-element-pick#readme",
   "bugs": {
-    "url": "https://github.com/your-handle/cmux-browser-element-pick/issues"
+    "url": "https://github.com/theevilhead/cmux-browser-element-pick/issues"
   },
   "publishConfig": {
     "access": "public"
